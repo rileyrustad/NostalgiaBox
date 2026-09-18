@@ -88,6 +88,15 @@ bridge_seconds: 0.8
 channel_bug_seconds: 4    # how long the channel banner lingers
 osd_duration: 2           # how long the volume bar / messages linger
 
+# Minimum time between accepted channel changes. Raise this if a held
+# channel up/down button still skips more channels than intended.
+channel_change_cooldown: 0.35
+
+# Second D-pad's Left (skip back): restart the current episode if it's been
+# playing longer than this many seconds; otherwise jump to the previous
+# episode instead.
+skip_back_seconds: 5
+
 # --- On-screen display look (the green digital readouts) ---------------------
 ui:
   font: "VT323"           # bundled retro terminal font (installed by install.sh)

@@ -52,18 +52,24 @@ def test_start_tunes_to_start_channel_and_plays(tmp_path):
 def test_channel_up_down_wraps(tmp_path):
     # The reserved TV Guide channel (99) is always the highest-numbered
     # channel in the lineup, so it's now part of the up/down wrap.
-    app, player, _ = build_app(tmp_path)
+    app, player, clock = build_app(tmp_path)
     app.start()
+    clock.advance(1.0)  # clear the channel-change cooldown between presses
     send(app, Action.CHANNEL_UP)
     assert app.lineup.current.number == 3
+    clock.advance(1.0)
     send(app, Action.CHANNEL_UP)
     assert app.lineup.current.number == 4
+    clock.advance(1.0)
     send(app, Action.CHANNEL_UP)
     assert app.lineup.current.number == 99  # wraps onto the Guide first
+    clock.advance(1.0)
     send(app, Action.CHANNEL_UP)
     assert app.lineup.current.number == 2  # then back to the lowest real channel
+    clock.advance(1.0)
     send(app, Action.CHANNEL_DOWN)
     assert app.lineup.current.number == 99  # wraps back onto the Guide
+    clock.advance(1.0)
     send(app, Action.CHANNEL_DOWN)
     assert app.lineup.current.number == 4  # continues down into the real channels
 
@@ -435,13 +441,95 @@ def test_naturally_ended_episode_reachable_via_nav_left(tmp_path):
     assert player.played[-1] == (first, 0.0)
 
 
+def test_channel_up_held_only_changes_channel_once(tmp_path):
+    # Simulates a held button: several CHANNEL_UP events arrive with no time
+    # passing between them (evdev autorepeat). Only the first should count;
+    # the rest are swallowed until the cooldown elapses.
+    app, player, clock = build_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+    send(app, Action.CHANNEL_UP)
+    send(app, Action.CHANNEL_UP)
+    assert app.lineup.current.number == 3  # moved exactly one channel
+    clock.advance(app.config.channel_change_cooldown + 0.01)
+    send(app, Action.CHANNEL_UP)
+    assert app.lineup.current.number == 4  # cooldown elapsed: next change allowed
+
+
+def test_channel_down_held_only_changes_channel_once(tmp_path):
+    app, player, clock = build_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_DOWN)
+    send(app, Action.CHANNEL_DOWN)
+    assert app.lineup.current.number == 99  # wrapped exactly once
+    clock.advance(app.config.channel_change_cooldown + 0.01)
+    send(app, Action.CHANNEL_DOWN)
+    assert app.lineup.current.number == 4
+
+
+def test_leaving_guide_via_channel_up_clears_guide_overlay(tmp_path):
+    # Regression: the guide overlay has no expiry of its own, so leaving the
+    # Guide via channel rollover (not just Home) must explicitly clear it.
+    app, player, clock = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    assert app.lineup.current.number == 99
+    assert 5 in player.overlays  # guide overlay is up
+    clock.advance(1.0)
+    send(app, Action.CHANNEL_DOWN)  # wraps to the highest real channel (4)
+    assert app.lineup.current.number == 4
+    assert 5 not in player.overlays  # guide overlay must not linger
+
+
+def test_leaving_guide_mid_file_playback_clears_playing_from_guide_flag(tmp_path):
+    app, player, clock = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    send(app, Action.ENTER)  # descend into Dragon Tales
+    send(app, Action.ENTER)  # play its first episode - _playing_from_guide=True
+    assert app._playing_from_guide is True
+    clock.advance(1.0)
+    send(app, Action.CHANNEL_UP)  # flip away to a normal channel mid-playback
+    assert app._playing_from_guide is False
+    assert 5 not in player.overlays
+
+
+def test_episode_name_flashed_on_channel_change(tmp_path):
+    app, player, _ = build_app(tmp_path, transition="none", bridge_seconds=0)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+    assert 6 in player.overlays
+    assert player.current.stem in player.overlays[6]
+
+
+def test_episode_name_flashed_on_bridge_cutover(tmp_path):
+    app, player, clock = build_app(tmp_path, bridge_seconds=0.8)
+    app.start()
+    old = player.current
+    send(app, Action.CHANNEL_UP)
+    target, _start = player.preloaded  # next episode preloading, not yet playing
+    assert player.overlays.get(6, "") == "" or old.stem in player.overlays[6]
+    assert target.stem not in player.overlays.get(6, "")
+    clock.advance(1.0)
+    app.step()  # bridge window elapsed -> cut-over
+    assert target.stem in player.overlays.get(6, "")
+
+
+def test_episode_name_flashed_on_skip_forward(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.NAV_RIGHT)
+    assert player.current.stem in player.overlays.get(6, "")
+
+
 def test_resume_mode_restarts_where_left(tmp_path):
     # bridge_seconds=0 keeps this test focused on resume (immediate switches)
-    app, player, _ = build_app(tmp_path, tune_in="resume", bridge_seconds=0)
+    app, player, clock = build_app(tmp_path, tune_in="resume", bridge_seconds=0)
     app.start()
     playing = player.current
     player.time_pos = 42.0
     send(app, Action.CHANNEL_UP)  # leave ch 2, remembering position 42
+    clock.advance(1.0)  # clear the channel-change cooldown
     send(app, Action.CHANNEL_DOWN)  # back to ch 2 -> resume at 42
     assert player.current == playing
     assert player.played[-1] == (playing, 42.0)

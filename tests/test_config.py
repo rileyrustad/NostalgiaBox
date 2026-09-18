@@ -111,6 +111,26 @@ def test_skip_back_seconds_default_and_clamped(tmp_path):
     assert cfg.skip_back_seconds == 60.0
 
 
+def test_channel_change_cooldown_default_and_clamped(tmp_path):
+    make_show(tmp_path, "a", 1)
+    cfg = config_from_dict({"channels": [{"path": str(tmp_path / "a")}]})
+    assert cfg.channel_change_cooldown == 0.35
+
+    data = {
+        "channel_change_cooldown": -1,
+        "channels": [{"path": str(tmp_path / "a")}],
+    }
+    cfg = config_from_dict(data)
+    assert cfg.channel_change_cooldown == 0.0
+
+    data = {
+        "channel_change_cooldown": 999,
+        "channels": [{"path": str(tmp_path / "a")}],
+    }
+    cfg = config_from_dict(data)
+    assert cfg.channel_change_cooldown == 5.0
+
+
 def test_video_extensions_normalised(tmp_path):
     make_show(tmp_path, "a", 1)
     data = {

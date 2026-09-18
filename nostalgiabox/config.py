@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 # Video containers we consider "an episode" when scanning a channel folder.
 DEFAULT_VIDEO_EXTENSIONS: tuple[str, ...] = (
-    ".mp4", ".mkv", ".avi", ".m4v", ".mov", ".webm", ".mpg", ".mpeg", ".ts",
+    ".mp4", ".mkv", ".avi", ".m4v", ".mov", ".webm", ".mpg", ".mpeg", ".ts", ".flv",
 )
 
 
@@ -122,6 +122,12 @@ class Config:
     # playing longer than this many seconds; otherwise go to the previous
     # episode instead (classic "previous track" behaviour).
     skip_back_seconds: float = 5.0
+    # Minimum time between accepted channel changes. A held CHANNEL_UP/DOWN
+    # button auto-repeats (see input/keyboard.py), which without this would
+    # spam multiple channel jumps from a single long press; this collapses
+    # repeats within the cooldown window down to one change, then allows the
+    # next one.
+    channel_change_cooldown: float = 0.35
     ui: UiConfig = field(default_factory=UiConfig)
     crt: CrtConfig = field(default_factory=CrtConfig)
 
@@ -341,6 +347,9 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
         osd_duration=_clamp_float(data.get("osd_duration", 2.0), 0.0, 60.0, "osd_duration"),
         skip_back_seconds=_clamp_float(
             data.get("skip_back_seconds", 5.0), 0.0, 60.0, "skip_back_seconds"
+        ),
+        channel_change_cooldown=_clamp_float(
+            data.get("channel_change_cooldown", 0.35), 0.0, 5.0, "channel_change_cooldown"
         ),
         ui=_parse_ui(data.get("ui")),
         crt=_parse_crt(data.get("crt")),

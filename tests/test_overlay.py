@@ -44,6 +44,32 @@ def test_channel_bug_drawn_and_expires(tmp_path):
     assert 1 not in player.overlays  # expired after 4s
 
 
+def test_episode_overlay_drawn_and_expires(tmp_path):
+    clock = FakeClock()
+    player = MockPlayer()
+    om = OverlayManager(player, _config(tmp_path), clock=clock)
+
+    om.show_episode("Dragon_Tales_ep03")
+    assert 6 in player.overlays  # episode overlay id
+    assert "Dragon_Tales_ep03" in player.overlays[6]
+
+    clock.advance(3.9)
+    om.tick()
+    assert 6 in player.overlays  # not yet expired (shares channel_bug_seconds)
+
+    clock.advance(0.2)
+    om.tick()
+    assert 6 not in player.overlays  # expired after 4s
+
+
+def test_clear_all_removes_episode_overlay(tmp_path):
+    player = MockPlayer()
+    om = OverlayManager(player, _config(tmp_path), clock=FakeClock())
+    om.show_episode("Dragon_Tales_ep03")
+    om.clear_all()
+    assert 6 not in player.overlays
+
+
 def test_volume_overlay_has_label_and_bars(tmp_path):
     player = MockPlayer()
     om = OverlayManager(player, _config(tmp_path), clock=FakeClock())

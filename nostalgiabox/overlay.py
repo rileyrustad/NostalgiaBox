@@ -49,6 +49,7 @@ _ID_VOLUME = 2
 _ID_STANDBY = 3
 _ID_MESSAGE = 4
 _ID_GUIDE = 5
+_ID_EPISODE = 6
 
 # How many guide rows fit before we have to scroll a window around the
 # selection - there's no scrolling primitive, so this is just "how many rows
@@ -103,6 +104,13 @@ class OverlayManager:
         self._player.set_overlay(_ID_MESSAGE, ass, CANVAS_W, CANVAS_H)
         self._arm(_ID_MESSAGE, dur)
 
+    def show_episode(self, name: str, *, duration: Optional[float] = None) -> None:
+        """Flash the episode's file name briefly, like the channel banner."""
+        dur = self._config.channel_bug_seconds if duration is None else duration
+        ass = _episode_ass(name, self._ui)
+        self._player.set_overlay(_ID_EPISODE, ass, CANVAS_W, CANVAS_H)
+        self._arm(_ID_EPISODE, dur)
+
     def show_standby(self) -> None:
         """Persistent 'standby' notice for when the box is 'off'."""
         ass = _standby_ass(self._ui)
@@ -134,7 +142,14 @@ class OverlayManager:
                 self._expiry.pop(overlay_id, None)
 
     def clear_all(self) -> None:
-        for overlay_id in (_ID_CHANNEL, _ID_VOLUME, _ID_STANDBY, _ID_MESSAGE, _ID_GUIDE):
+        for overlay_id in (
+            _ID_CHANNEL,
+            _ID_VOLUME,
+            _ID_STANDBY,
+            _ID_MESSAGE,
+            _ID_GUIDE,
+            _ID_EPISODE,
+        ):
             self._player.clear_overlay(overlay_id)
         self._expiry.clear()
 
@@ -219,6 +234,11 @@ def _volume_ass(level: int, muted: bool, ui: UiConfig) -> str:
 def _message_ass(text: str, ui: UiConfig) -> str:
     """A centred green digital message (channel entry, 'NO SIGNAL', etc.)."""
     return rf"{{\an8\pos({_FRAME_CX},{_IY0}){_style(ui, size=60)}}}{_escape(text)}"
+
+
+def _episode_ass(name: str, ui: UiConfig) -> str:
+    """The episode's file name, flashed bottom-centre like a lower-third."""
+    return rf"{{\an2\pos({_FRAME_CX},{_IY1}){_style(ui, size=44)}}}{_escape(name)}"
 
 
 def _standby_ass(ui: UiConfig) -> str:

@@ -68,6 +68,7 @@ class TVApp:
         self._playing_path: Optional[Path] = None
         self._playing_from_guide = False
         self._last_channel_number: Optional[int] = None
+        self._last_channel_change: float = 0.0
         self._running = False
 
         # Direct channel entry ("type 1 then 2 -> channel 12").
@@ -80,6 +81,7 @@ class TVApp:
         # at the moment of the cut-over, not when the button is pressed.
         self._switch_deadline: Optional[float] = None
         self._pending_banner: Optional[tuple[int, str]] = None
+        self._pending_episode_name: Optional[str] = None
 
         # Playback-finished events from the player (may arrive on any thread).
         self._ended: "queue.Queue[str]" = queue.Queue()
@@ -186,10 +188,14 @@ class TVApp:
         if self._switch_deadline is not None and now >= self._switch_deadline:
             self._switch_deadline = None
             self.player.commit_switch()
-            # Flash the channel banner right as the picture actually changes.
+            # Flash the channel banner and episode name right as the picture
+            # actually changes.
             if self._pending_banner is not None:
                 self.overlay.show_channel_bug(*self._pending_banner)
                 self._pending_banner = None
+            if self._pending_episode_name is not None:
+                self.overlay.show_episode(self._pending_episode_name)
+                self._pending_episode_name = None
 
     # -- input handling -----------------------------------------------------
     def handle_event(self, event: InputEvent) -> None:
@@ -240,13 +246,30 @@ class TVApp:
                 handler()
 
     # -- channel changing ---------------------------------------------------
+    def _channel_change_allowed(self) -> bool:
+        """Rate-limit CHANNEL_UP/DOWN so a held button doesn't skip channels.
+
+        The keyboard backend lets these two actions auto-repeat while held
+        (see input/keyboard.py), which otherwise fires far more channel
+        changes than intended from one long press.
+        """
+        now = self._clock()
+        if now - self._last_channel_change < self.config.channel_change_cooldown:
+            return False
+        self._last_channel_change = now
+        return True
+
     def _channel_up(self) -> None:
+        if not self._channel_change_allowed():
+            return
         self._remember_position()
         self._last_channel_number = self.lineup.current.number
         self.lineup.up()
         self.tune_current()
 
     def _channel_down(self) -> None:
+        if not self._channel_change_allowed():
+            return
         self._remember_position()
         self._last_channel_number = self.lineup.current.number
         self.lineup.down()
@@ -322,8 +345,17 @@ class TVApp:
             self._enter_guide_fresh()
             return
 
+        # Leaving the Guide - including via channel up/down rollover, not just
+        # Home - must always drop its overlay and "return to Guide" bookkeeping.
+        # The guide overlay has no expiry of its own (see OverlayManager.show_guide),
+        # so without this it stays stuck on screen after flipping to a normal
+        # channel.
+        self.overlay.clear_guide()
+        self._playing_from_guide = False
+
         request = channel.tune_in()
         self._pending_banner = None
+        self._pending_episode_name = None
 
         if request is None:
             # No episodes on this channel: show the "no signal" screen.
@@ -340,6 +372,7 @@ class TVApp:
             # Transition clip (glitch/static) + preloaded episode.
             self._switch_deadline = None
             self.overlay.show_channel_bug(channel.number, channel.name)
+            self.overlay.show_episode(request.path.stem)
             self._playing_path = request.path
             self.player.play_transition(
                 self._transition_path,
@@ -349,12 +382,14 @@ class TVApp:
             )
         elif self.config.bridge_seconds > 0 and self._playing_path is not None:
             # No transition effect: keep the current show playing while the next
-            # channel preloads, then cut over (no frozen frame). The banner is
-            # shown at the cut-over (see _maybe_commit_switch), not right now.
+            # channel preloads, then cut over (no frozen frame). The banner and
+            # episode name are shown at the cut-over (see _maybe_commit_switch),
+            # not right now.
             self._playing_path = request.path
             self.player.preload_next(request.path, start=request.start)
             self._switch_deadline = self._clock() + self.config.bridge_seconds
             self._pending_banner = (channel.number, channel.name)
+            self._pending_episode_name = request.path.stem
         else:
             self._switch_deadline = None
             self.overlay.show_channel_bug(channel.number, channel.name)
@@ -363,10 +398,12 @@ class TVApp:
     def _play_request(self, request: PlayRequest) -> None:
         self._playing_path = request.path
         self.player.play(request.path, start=request.start)
+        self.overlay.show_episode(request.path.stem)
 
     def _show_no_signal(self, channel: Channel) -> None:
         self._switch_deadline = None
         self._pending_banner = None
+        self._pending_episode_name = None
         self._playing_path = None
         if self._colorbars_path is not None:
             self.player.play_loop(self._colorbars_path)
@@ -394,6 +431,7 @@ class TVApp:
         """
         self._switch_deadline = None
         self._pending_banner = None
+        self._pending_episode_name = None
         self._playing_path = None
         self._playing_from_guide = False
         self.player.stop()
@@ -429,6 +467,7 @@ class TVApp:
         self._playing_path = path
         self.overlay.clear_guide()
         self.player.play(path, start=0.0)
+        self.overlay.show_episode(path.stem)
 
     def _go_home(self) -> None:
         """Jump straight to the Guide from anywhere; reset it if already there."""
@@ -463,6 +502,7 @@ class TVApp:
         self.powered_off = True
         self._switch_deadline = None
         self._pending_banner = None
+        self._pending_episode_name = None
         try:
             self.overlay.clear_all()
             self.overlay.show_message("GOODBYE", duration=0)
@@ -497,6 +537,7 @@ class TVApp:
             self._remember_position()
             self._switch_deadline = None
             self._pending_banner = None
+            self._pending_episode_name = None
             self.player.stop()
             self.overlay.clear_all()
             self.overlay.show_standby()
