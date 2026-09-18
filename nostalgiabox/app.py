@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .actions import Action, InputEvent
-from .channel import Channel, ChannelLineup, PlayRequest, build_lineup
+from .browser import DirEntry, GuideState
+from .channel import Channel, ChannelLineup, GUIDE_CHANNEL_NUMBER, PlayRequest, build_lineup
 from .config import Config
 from .input.manager import InputManager, create_backends
 from .overlay import OverlayManager
@@ -57,6 +58,7 @@ class TVApp:
         self._clock = clock
 
         self.lineup: ChannelLineup = build_lineup(config)
+        self.guide = GuideState(self._guide_home_entries(), config.video_extensions)
 
         # Runtime state.
         self.volume = config.initial_volume
@@ -64,6 +66,7 @@ class TVApp:
         self.standby = False
         self.powered_off = False
         self._playing_path: Optional[Path] = None
+        self._playing_from_guide = False
         self._last_channel_number: Optional[int] = None
         self._running = False
 
@@ -203,6 +206,19 @@ class TVApp:
         if self.standby:
             return
 
+        # While the TV Guide is tuned in, its own nav/select/back actions take
+        # over (CHANNEL_UP/DOWN, HOME, and everything else fall through below
+        # unchanged, so flipping away or pressing Home always still works).
+        guide_actions = {
+            Action.NAV_UP: self._guide_nav_up,
+            Action.NAV_DOWN: self._guide_nav_down,
+            Action.ENTER: self._guide_select,
+            Action.BACK: self._guide_back,
+        }
+        if self.lineup.current.reserved and action in guide_actions:
+            guide_actions[action]()
+            return
+
         handlers = {
             Action.CHANNEL_UP: self._channel_up,
             Action.CHANNEL_DOWN: self._channel_down,
@@ -212,6 +228,9 @@ class TVApp:
             Action.INFO: self._show_info,
             Action.LAST_CHANNEL: self._jump_last_channel,
             Action.ENTER: self._confirm_digits,
+            Action.HOME: self._go_home,
+            Action.NAV_RIGHT: self._skip_forward,
+            Action.NAV_LEFT: self._skip_back,
         }
         if action == Action.DIGIT:
             self._push_digit(event.value or 0)
@@ -258,10 +277,50 @@ class TVApp:
         self.tune_current()
         return True
 
+    def _skip_forward(self) -> None:
+        """Second D-pad's Right: skip to a fresh episode, immediately.
+
+        No-op in the TV Guide (reserved channels) or if nothing is playing.
+        """
+        channel = self.lineup.current
+        if channel.reserved or self._playing_path is None:
+            return
+        old = self._playing_path
+        request = channel.skip_forward()
+        channel.record_played(old)
+        self._play_request(request)
+        self.overlay.show_message("SKIP >>")
+
+    def _skip_back(self) -> None:
+        """Second D-pad's Left: restart, or jump to the previous episode.
+
+        If the current episode has been playing longer than
+        ``config.skip_back_seconds``, restart it from the beginning. Otherwise
+        go to the previous episode (classic "previous track" behaviour), or
+        fall back to restarting if there's no history yet. No-op in the TV
+        Guide (reserved channels) or if nothing is playing.
+        """
+        channel = self.lineup.current
+        if channel.reserved or self._playing_path is None:
+            return
+        pos = self.player.get_time_pos()
+        if pos is not None and pos <= self.config.skip_back_seconds:
+            prev = channel.previous_played()
+            if prev is not None:
+                self._play_request(PlayRequest(path=prev, start=0.0))
+                self.overlay.show_message("<< PREVIOUS")
+                return
+        self._play_request(PlayRequest(path=self._playing_path, start=0.0))
+        self.overlay.show_message("RESTART")
+
     def tune_current(self, *, show_static: bool = True) -> None:
         """Tune into the currently selected channel."""
         channel = self.lineup.current
         self.overlay.clear_standby()
+
+        if channel.reserved:
+            self._enter_guide_fresh()
+            return
 
         request = channel.tune_in()
         self._pending_banner = None
@@ -316,6 +375,68 @@ class TVApp:
         self.overlay.show_message(
             f"CH {channel.number:02d}  {channel.name}  -  NO SIGNAL", duration=6.0
         )
+
+    # -- TV Guide (channel 99) -----------------------------------------------
+    def _guide_home_entries(self) -> list[DirEntry]:
+        """Home listing: one entry per real (non-reserved) channel folder."""
+        return [
+            DirEntry(name=ch.name, path=ch.config.path, is_dir=True)
+            for ch in self.lineup
+            if not ch.reserved
+        ]
+
+    def _enter_guide_fresh(self) -> None:
+        """Land on the Guide via normal tuning (channel up/down, Home, etc.).
+
+        Always resets to the Home listing - distinct from _advance_current's
+        "return to the guide after a picked episode ends", which keeps the
+        browsing position as it was.
+        """
+        self._switch_deadline = None
+        self._pending_banner = None
+        self._playing_path = None
+        self._playing_from_guide = False
+        self.player.stop()
+        self.overlay.clear_all()
+        self.guide.reset_to_home()
+        self._show_guide()
+
+    def _show_guide(self) -> None:
+        breadcrumb, entries, selected = self.guide.current_view()
+        self.overlay.show_guide(breadcrumb, entries, selected)
+
+    def _guide_nav_up(self) -> None:
+        self.guide.move(-1)
+        self._show_guide()
+
+    def _guide_nav_down(self) -> None:
+        self.guide.move(1)
+        self._show_guide()
+
+    def _guide_select(self) -> None:
+        result = self.guide.enter()
+        if result is None:
+            self._show_guide()  # descended into a sub-folder
+        else:
+            self._play_guide_file(result)
+
+    def _guide_back(self) -> None:
+        self.guide.back()
+        self._show_guide()
+
+    def _play_guide_file(self, path: Path) -> None:
+        self._playing_from_guide = True
+        self._playing_path = path
+        self.overlay.clear_guide()
+        self.player.play(path, start=0.0)
+
+    def _go_home(self) -> None:
+        """Jump straight to the Guide from anywhere; reset it if already there."""
+        if self.lineup.current.number != GUIDE_CHANNEL_NUMBER:
+            self.select_channel_number(GUIDE_CHANNEL_NUMBER)
+        else:
+            self.guide.reset_to_home()
+            self._show_guide()
 
     # -- volume -------------------------------------------------------------
     def _volume_up(self) -> None:
@@ -415,10 +536,21 @@ class TVApp:
                 advanced = True
 
     def _advance_current(self) -> None:
+        if self._playing_from_guide:
+            # A Guide-picked file finished: loop back to the Guide screen at
+            # the same folder/selection, not into the (empty) 99's shuffle.
+            self._playing_from_guide = False
+            self._playing_path = None
+            self.player.stop()
+            self._show_guide()
+            return
         request = self.lineup.current.advance()
         if request is None:
             self._show_no_signal(self.lineup.current)
         else:
+            old = self._playing_path
+            if old is not None:
+                self.lineup.current.record_played(old)
             self._play_request(request)
 
     # -- helpers ------------------------------------------------------------

@@ -1,4 +1,5 @@
 import random
+from pathlib import Path
 
 from nostalgiabox.channel import (
     BroadcastSchedule,
@@ -187,14 +188,17 @@ def test_lineup_navigation(tmp_path):
         }
     )
     lineup = build_lineup(cfg)
-    assert lineup.numbers == [2, 4, 7]
+    # 99 (the reserved TV Guide channel) is always appended, so it's now part
+    # of the up/down wrap - it sits between 7 and the wrap back to 2.
+    assert lineup.numbers == [2, 4, 7, 99]
     assert lineup.current.number == 2
     assert lineup.up().number == 4
     assert lineup.up().number == 7
-    assert lineup.up().number == 2  # wraps
-    assert lineup.down().number == 7  # wraps back
+    assert lineup.up().number == 99  # wraps onto the Guide first
+    assert lineup.up().number == 2  # then back to the start
+    assert lineup.down().number == 99  # wraps back onto the Guide
     assert lineup.select_number(4).number == 4
-    assert lineup.select_number(99) is None
+    assert lineup.select_number(999) is None  # a genuinely nonexistent number
     assert lineup.has_number(7)
 
 
@@ -210,4 +214,84 @@ def test_lineup_sorted_by_number(tmp_path):
         }
     )
     lineup = build_lineup(cfg)
-    assert lineup.numbers == [3, 9]
+    assert lineup.numbers == [3, 9, 99]  # 99 (TV Guide) always appended last
+
+
+def test_build_lineup_always_includes_guide_channel(tmp_path):
+    make_show(tmp_path, "arthur", 1)
+    cfg = config_from_dict(
+        {"channels": [{"number": 3, "name": "Arthur", "path": str(tmp_path / "arthur")}]}
+    )
+    lineup = build_lineup(cfg)
+    guide = lineup.select_number(99)
+    assert guide is not None
+    assert guide.name == "TV Guide"
+    assert guide.reserved is True
+    assert guide.episodes == []
+
+
+def test_record_played_and_previous_played_lifo(tmp_path):
+    ch = _channel(tmp_path)
+    paths = [Path(f"ep{i}.mp4") for i in range(3)]
+    for p in paths:
+        ch.record_played(p)
+    assert ch.previous_played() == paths[2]
+    assert ch.previous_played() == paths[1]
+    assert ch.previous_played() == paths[0]
+    assert ch.previous_played() is None
+
+
+def test_history_caps_at_20_entries(tmp_path):
+    ch = _channel(tmp_path)
+    paths = [Path(f"ep{i}.mp4") for i in range(25)]
+    for p in paths:
+        ch.record_played(p)
+    # Oldest 5 (ep0..ep4) were dropped; only the most recent 20 remain.
+    popped = [ch.previous_played() for _ in range(20)]
+    assert popped == list(reversed(paths[5:]))
+    assert ch.previous_played() is None
+
+
+def test_skip_forward_behaves_like_fresh_shuffle_not_broadcast_schedule(tmp_path, monkeypatch):
+    import nostalgiabox.channel as channel_mod
+
+    monkeypatch.setattr(channel_mod, "probe_duration", lambda p: 60.0)
+    ch = _channel(
+        tmp_path, episodes=3, tune_in="broadcast", start_offset_min=6.0, start_offset_max=6.0
+    )
+    # Force-build the broadcast schedule so advance() would be schedule-aware.
+    ch.tune_in(now=0.0)
+    r1 = ch.skip_forward()
+    r2 = ch.skip_forward()
+    # skip_forward always draws from the shuffle bag: start is the configured
+    # fixed start-offset, never an arbitrary mid-episode broadcast offset.
+    assert r1.start == 6.0
+    assert r2.start == 6.0
+    assert r1.path in ch.episodes
+    assert r2.path in ch.episodes
+
+
+def test_lineup_wraps_onto_and_off_reserved_channel(tmp_path):
+    for n in ("a", "b", "c"):
+        make_show(tmp_path, n, 1)
+    cfg = config_from_dict(
+        {
+            "channels": [
+                {"number": 2, "name": "A", "path": str(tmp_path / "a")},
+                {"number": 4, "name": "B", "path": str(tmp_path / "b")},
+                {"number": 7, "name": "C", "path": str(tmp_path / "c")},
+            ],
+        }
+    )
+    lineup = build_lineup(cfg)
+    assert lineup.numbers == [2, 4, 7, 99]
+
+    lineup.select_number(7)
+    assert lineup.up().number == 99  # up from the highest configured channel
+
+    lineup.select_number(2)
+    assert lineup.down().number == 99  # down from the lowest configured channel
+    assert lineup.down().number == 7  # continuing down moves into real channels
+
+    lineup.select_number(99)
+    assert lineup.up().number == 2  # up from the Guide wraps to the lowest channel

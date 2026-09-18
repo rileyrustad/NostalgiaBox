@@ -17,8 +17,9 @@ scales it to the TV) and cleared automatically after a few seconds by
 from __future__ import annotations
 
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Sequence
 
+from .browser import DirEntry
 from .config import Config, UiConfig
 from .player import Player
 
@@ -47,6 +48,16 @@ _ID_CHANNEL = 1
 _ID_VOLUME = 2
 _ID_STANDBY = 3
 _ID_MESSAGE = 4
+_ID_GUIDE = 5
+
+# How many guide rows fit before we have to scroll a window around the
+# selection - there's no scrolling primitive, so this is just "how many rows
+# of _GUIDE_ROW_H fit in the safe area below the breadcrumb header".
+_GUIDE_MAX_ROWS = 9
+_GUIDE_ROW_H = 56
+_GUIDE_ROW_FONT = 36
+_GUIDE_HEADER_FONT = 36
+_GUIDE_LIST_TOP = _IY0 + 70
 
 _BLACK = "&H00000000"
 
@@ -102,6 +113,18 @@ class OverlayManager:
         self._player.clear_overlay(_ID_STANDBY)
         self._expiry.pop(_ID_STANDBY, None)
 
+    def show_guide(
+        self, breadcrumb: str, entries: Sequence[DirEntry], selected_index: int
+    ) -> None:
+        """Persistent TV Guide file-browser list, over a plain dark background."""
+        ass = _guide_ass(breadcrumb, entries, selected_index, self._ui)
+        self._player.set_overlay(_ID_GUIDE, ass, CANVAS_W, CANVAS_H)
+        self._expiry.pop(_ID_GUIDE, None)
+
+    def clear_guide(self) -> None:
+        self._player.clear_overlay(_ID_GUIDE)
+        self._expiry.pop(_ID_GUIDE, None)
+
     def tick(self) -> None:
         """Clear any overlays whose time is up. Call this every loop iteration."""
         now = self._clock()
@@ -111,7 +134,7 @@ class OverlayManager:
                 self._expiry.pop(overlay_id, None)
 
     def clear_all(self) -> None:
-        for overlay_id in (_ID_CHANNEL, _ID_VOLUME, _ID_STANDBY, _ID_MESSAGE):
+        for overlay_id in (_ID_CHANNEL, _ID_VOLUME, _ID_STANDBY, _ID_MESSAGE, _ID_GUIDE):
             self._player.clear_overlay(overlay_id)
         self._expiry.clear()
 
@@ -134,9 +157,9 @@ def _hex_to_ass(hex_color: str, alpha: int = 0) -> str:
     return f"&H{alpha:02X}{b}{g}{r}".upper()
 
 
-def _style(ui: UiConfig, *, size: int, alpha: int = 0) -> str:
+def _style(ui: UiConfig, *, size: int, alpha: int = 0, color_hex: Optional[str] = None) -> str:
     """Common ASS override tags: retro font, green fill, and a soft CRT glow."""
-    color = _hex_to_ass(ui.color, alpha)
+    color = _hex_to_ass(color_hex or ui.color, alpha)
     tags = rf"\fn{ui.font}\b1\fs{size}\c{color}\1a&H{alpha:02X}&"
     if ui.glow:
         # A blurred green border reads as phosphor bloom; a faint dark edge keeps
@@ -200,6 +223,51 @@ def _message_ass(text: str, ui: UiConfig) -> str:
 
 def _standby_ass(ui: UiConfig) -> str:
     return rf"{{\an5\pos({_FRAME_CX},{CANVAS_H // 2}){_style(ui, size=72)}}}STANDBY"
+
+
+def _guide_ass(
+    breadcrumb: str, entries: Sequence[DirEntry], selected_index: int, ui: UiConfig
+) -> str:
+    """The TV Guide list: a breadcrumb header + a windowed, highlighted list.
+
+    There's no scrolling primitive in ASS, so for folders with more entries
+    than fit on screen we render a sliding window centred on the selection.
+    """
+    parts = [rf"{{\an7\pos({_IX0},{_IY0}){_style(ui, size=_GUIDE_HEADER_FONT)}}}{_escape(breadcrumb)}"]
+
+    if not entries:
+        parts.append(
+            rf"{{\an7\pos({_IX0},{_GUIDE_LIST_TOP}){_style(ui, size=_GUIDE_ROW_FONT)}}}(empty)"
+        )
+        return "\n".join(parts)
+
+    row_w = _IX1 - _IX0
+    max_rows = max(1, min(_GUIDE_MAX_ROWS, (_IY1 - _GUIDE_LIST_TOP) // _GUIDE_ROW_H))
+    total = len(entries)
+    if total <= max_rows:
+        start = 0
+    else:
+        start = max(0, min(selected_index - max_rows // 2, total - max_rows))
+    visible = entries[start : start + max_rows]
+
+    green = _hex_to_ass(ui.color)
+    for i, entry in enumerate(visible):
+        idx = start + i
+        y = _GUIDE_LIST_TOP + i * _GUIDE_ROW_H
+        label = entry.name + ("/" if entry.is_dir else "")
+        selected = idx == selected_index
+        if selected:
+            # Highlight bar behind the row, then the label drawn in the "dim"
+            # colour on top so it reads clearly against the bright fill.
+            parts.append(
+                _filled_rect(x=_IX0 - 8, y=y - 6, w=row_w + 16, h=_GUIDE_ROW_H - 6, fill=green)
+            )
+            style = _style(ui, size=_GUIDE_ROW_FONT, color_hex=ui.dim_color)
+        else:
+            style = _style(ui, size=_GUIDE_ROW_FONT)
+        parts.append(rf"{{\an7\pos({_IX0},{y}){style}}}{_escape(label)}")
+
+    return "\n".join(parts)
 
 
 def _filled_rect(*, x: float, y: float, w: float, h: float, fill: str) -> str:

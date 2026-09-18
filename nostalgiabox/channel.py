@@ -28,7 +28,11 @@ _SEASON_PATTERNS = (
     re.compile(r"\b(\d{1,2})x\d{1,3}\b"),                       # 6x01
 )
 
-from .config import ChannelConfig, Config
+from .config import ChannelConfig, Config, RESERVED_CHANNEL_NUMBERS
+
+# Name shown for the built-in TV Guide file browser (see build_lineup).
+GUIDE_CHANNEL_NUMBER = min(RESERVED_CHANNEL_NUMBERS)
+GUIDE_CHANNEL_NAME = "TV Guide"
 from .playlist import ShuffleBag
 from .probe import DEFAULT_EPISODE_SECONDS, probe_duration
 
@@ -151,6 +155,8 @@ class BroadcastSchedule:
 class Channel:
     """A single TV channel backed by a folder of episodes."""
 
+    _HISTORY_LIMIT = 20
+
     def __init__(
         self,
         config: ChannelConfig,
@@ -182,6 +188,8 @@ class Channel:
         self._resume_position: float = 0.0
         # Broadcast schedule (built lazily on first use in "broadcast" mode).
         self._broadcast: Optional[BroadcastSchedule] = None
+        # Bounded play history (used by manual "skip back"/"previous episode").
+        self._history: List[Path] = []
 
     # -- identity -----------------------------------------------------------
     @property
@@ -195,6 +203,10 @@ class Channel:
     @property
     def is_empty(self) -> bool:
         return not self.episodes
+
+    @property
+    def reserved(self) -> bool:
+        return self.config.reserved
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Channel {self.number} {self.name!r} ({len(self.episodes)} eps)>"
@@ -238,6 +250,26 @@ class Channel:
         """Record where the viewer left off (for the "resume" mode)."""
         self._resume_path = path
         self._resume_position = max(0.0, position)
+
+    def skip_forward(self) -> PlayRequest:
+        """Force a genuinely fresh shuffle-bag draw (manual "skip forward").
+
+        Deliberately different from :meth:`advance`: a schedule-aware advance()
+        could return the same still-airing episode in broadcast mode, which
+        would feel broken for a button press that should always visibly do
+        something.
+        """
+        return self._next_shuffled()
+
+    def record_played(self, path: Path) -> None:
+        """Push ``path`` onto the bounded play-history stack."""
+        self._history.append(path)
+        if len(self._history) > self._HISTORY_LIMIT:
+            self._history.pop(0)
+
+    def previous_played(self) -> Optional[Path]:
+        """Pop and return the most recently played path, or None if empty."""
+        return self._history.pop() if self._history else None
 
     # -- broadcast schedule -------------------------------------------------
     def _ensure_broadcast(self, *, epoch: float) -> Optional[BroadcastSchedule]:
@@ -345,6 +377,21 @@ def build_lineup(config: Config, *, rng: Optional[random.Random] = None) -> Chan
                 rng=ch_rng,
             )
         )
+    # Always append the built-in TV Guide as a reserved channel - it's never
+    # part of user config (config.py rejects RESERVED_CHANNEL_NUMBERS), and
+    # bypasses scan_episodes entirely since it has no folder of its own.
+    channels.append(
+        Channel(
+            ChannelConfig(
+                number=GUIDE_CHANNEL_NUMBER,
+                name=GUIDE_CHANNEL_NAME,
+                path=Path("."),
+                shuffle=False,
+                reserved=True,
+            ),
+            [],
+        )
+    )
     return ChannelLineup(channels)
 
 
@@ -356,4 +403,6 @@ __all__ = [
     "scan_episodes",
     "detect_season",
     "build_lineup",
+    "GUIDE_CHANNEL_NUMBER",
+    "GUIDE_CHANNEL_NAME",
 ]

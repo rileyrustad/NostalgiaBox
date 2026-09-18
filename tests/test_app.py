@@ -50,6 +50,8 @@ def test_start_tunes_to_start_channel_and_plays(tmp_path):
 
 
 def test_channel_up_down_wraps(tmp_path):
+    # The reserved TV Guide channel (99) is always the highest-numbered
+    # channel in the lineup, so it's now part of the up/down wrap.
     app, player, _ = build_app(tmp_path)
     app.start()
     send(app, Action.CHANNEL_UP)
@@ -57,9 +59,13 @@ def test_channel_up_down_wraps(tmp_path):
     send(app, Action.CHANNEL_UP)
     assert app.lineup.current.number == 4
     send(app, Action.CHANNEL_UP)
-    assert app.lineup.current.number == 2  # wrapped
+    assert app.lineup.current.number == 99  # wraps onto the Guide first
+    send(app, Action.CHANNEL_UP)
+    assert app.lineup.current.number == 2  # then back to the lowest real channel
     send(app, Action.CHANNEL_DOWN)
-    assert app.lineup.current.number == 4  # wrapped back
+    assert app.lineup.current.number == 99  # wraps back onto the Guide
+    send(app, Action.CHANNEL_DOWN)
+    assert app.lineup.current.number == 4  # continues down into the real channels
 
 
 def test_volume_controls(tmp_path):
@@ -135,7 +141,9 @@ def test_direct_channel_entry_times_out(tmp_path):
 def test_invalid_channel_entry_shows_message(tmp_path):
     app, player, _ = build_app(tmp_path)
     app.start()
-    assert app.select_channel_number(99) is False
+    # 999 is a genuinely nonexistent channel - 99 is now always the reserved
+    # TV Guide channel, so it no longer works as a "doesn't exist" stand-in.
+    assert app.select_channel_number(999) is False
     assert "NO CHANNEL" in player.overlays.get(4, "")
     assert app.lineup.current.number == 2  # unchanged
 
@@ -277,6 +285,154 @@ def test_channel_banner_deferred_until_switch(tmp_path):
     clock.advance(1.0)
     app.step()                            # cut-over happens here
     assert "CH 03" in player.overlays.get(1, "")  # banner appears at the switch
+
+
+def test_home_action_jumps_to_guide(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    assert app.lineup.current.number == 99
+    ass = player.overlays.get(5, "")
+    assert "Dragon Tales" in ass
+    assert "Arthur" in ass
+    assert "Rugrats" in ass
+
+
+def test_guide_nav_down_and_enter_descends_into_folder(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    send(app, Action.NAV_DOWN)
+    send(app, Action.ENTER)
+    assert app.lineup.current.number == 99  # still on the Guide channel
+    breadcrumb, _entries, _selected = app.guide.current_view()
+    assert breadcrumb == "TV Guide > Arthur"
+
+
+def test_guide_enter_on_file_plays_it(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    send(app, Action.ENTER)  # descend into the first entry (Dragon Tales)
+    send(app, Action.ENTER)  # select its first episode file
+    assert app._playing_from_guide is True
+    assert player.current is not None
+    assert 5 not in player.overlays  # guide overlay cleared while playing
+
+
+def test_guide_playback_end_returns_to_guide_same_position(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    send(app, Action.ENTER)  # descend into Dragon Tales
+    breadcrumb_before, _entries, selected_before = app.guide.current_view()
+    send(app, Action.ENTER)  # play its first episode
+    assert app._playing_from_guide is True
+
+    player.finish_current(END_EOF)
+    app._drain_playback_events()
+
+    assert app._playing_from_guide is False
+    assert 5 in player.overlays  # back on the guide overlay
+    breadcrumb_after, _entries, selected_after = app.guide.current_view()
+    assert breadcrumb_after == breadcrumb_before  # did NOT reset to Home
+    assert selected_after == selected_before
+
+
+def test_guide_back_at_home_is_noop(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    before = app.guide.current_view()
+    send(app, Action.BACK)
+    assert app.guide.current_view() == before
+
+
+def test_channel_up_leaves_guide_normally(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    assert app.lineup.current.number == 99
+    send(app, Action.CHANNEL_UP)
+    assert app.lineup.current.number == 2  # wraps back to the lowest real channel
+
+
+def test_home_again_while_deep_in_guide_resets_to_home(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    send(app, Action.ENTER)  # descend into Dragon Tales
+    assert app.guide.current_view()[0] != "TV Guide"
+    send(app, Action.HOME)  # already on the Guide - should reset, not no-op
+    breadcrumb, _entries, selected = app.guide.current_view()
+    assert breadcrumb == "TV Guide"
+    assert selected == 0
+
+
+def test_nav_right_skips_forward_to_different_episode(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    first = player.current
+    channel_before = app.lineup.current
+    send(app, Action.NAV_RIGHT)
+    assert player.current is not None
+    assert player.current != first
+    assert app.lineup.current is channel_before  # channel unchanged
+    assert app.guide.current_view()[0] == "TV Guide"  # guide untouched (still Home)
+
+
+def test_nav_left_beyond_threshold_restarts_current_episode(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    playing = player.current
+    player.time_pos = 30.0  # well beyond the default 5.0s skip_back_seconds
+    send(app, Action.NAV_LEFT)
+    assert player.played[-1] == (playing, 0.0)
+
+
+def test_nav_left_within_threshold_with_history_plays_previous_episode(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    old = player.current
+    send(app, Action.NAV_RIGHT)  # pushes `old` into history, plays something new
+    assert player.current != old
+    player.time_pos = 2.0  # within the default 5.0s threshold
+    send(app, Action.NAV_LEFT)
+    assert player.played[-1] == (old, 0.0)
+
+
+def test_nav_left_within_threshold_no_history_restarts_current(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    playing = player.current
+    player.time_pos = 2.0  # within threshold, but nothing has been skipped yet
+    send(app, Action.NAV_LEFT)
+    assert player.played[-1] == (playing, 0.0)
+
+
+def test_nav_left_and_right_are_noops_in_guide(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    send(app, Action.HOME)
+    assert app.lineup.current.number == 99
+    before_played = list(player.played)
+    before_view = app.guide.current_view()
+    send(app, Action.NAV_RIGHT)
+    send(app, Action.NAV_LEFT)
+    assert player.played == before_played
+    assert app.guide.current_view() == before_view
+
+
+def test_naturally_ended_episode_reachable_via_nav_left(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    first = player.current
+    player.finish_current(END_EOF)
+    app._drain_playback_events()
+    assert player.current != first
+    player.time_pos = 2.0  # within threshold
+    send(app, Action.NAV_LEFT)
+    assert player.played[-1] == (first, 0.0)
 
 
 def test_resume_mode_restarts_where_left(tmp_path):

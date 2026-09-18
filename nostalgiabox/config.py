@@ -24,6 +24,11 @@ class ConfigError(Exception):
     """Raised when the configuration file is missing or invalid."""
 
 
+# Channel number(s) the app reserves for its own built-in features (currently
+# just the TV Guide file browser) and refuses to let user config claim.
+RESERVED_CHANNEL_NUMBERS: frozenset[int] = frozenset({99})
+
+
 # How a channel behaves the moment you tune into it.
 #   random    - start a fresh random episode from the beginning (the default,
 #               and what most people picture: flip to the channel, a show
@@ -78,6 +83,9 @@ class ChannelConfig:
     # a set of season numbers detected from the path (e.g. S06E01, "Season 6").
     exclude: tuple[str, ...] = ()
     exclude_seasons: frozenset[int] = frozenset()
+    # True only for the app's own built-in TV Guide channel, synthesized by
+    # build_lineup - never set from user config (see RESERVED_CHANNEL_NUMBERS).
+    reserved: bool = False
 
     def __post_init__(self) -> None:
         if self.number < 0:
@@ -110,6 +118,10 @@ class Config:
     bridge_seconds: float = 0.8
     channel_bug_seconds: float = 4.0      # how long the channel banner lingers
     osd_duration: float = 2.0             # how long volume/message overlays linger
+    # Second D-pad's Left (NAV_LEFT): restart the current episode if it's been
+    # playing longer than this many seconds; otherwise go to the previous
+    # episode instead (classic "previous track" behaviour).
+    skip_back_seconds: float = 5.0
     ui: UiConfig = field(default_factory=UiConfig)
     crt: CrtConfig = field(default_factory=CrtConfig)
 
@@ -166,6 +178,14 @@ def _discover_channels(
         (p for p in media_root.iterdir() if p.is_dir() and not p.name.startswith(".")),
         key=lambda p: p.name.lower(),
     )
+    if subdirs and start_number + len(subdirs) - 1 >= min(RESERVED_CHANNEL_NUMBERS):
+        raise ConfigError(
+            f"media_root has too many show folders ({len(subdirs)}) starting at "
+            f"channel {start_number} - auto-numbering would collide with the "
+            f"reserved TV Guide channel ({min(RESERVED_CHANNEL_NUMBERS)}). Lower "
+            "first_channel_number or use fewer folders."
+        )
+
     channels: List[ChannelConfig] = []
     for offset, folder in enumerate(subdirs):
         channels.append(
@@ -281,6 +301,7 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
         raise ConfigError("no channels found - check 'channels' or the folders under 'media_root'")
 
     _ensure_unique_numbers(channels)
+    _ensure_no_reserved_numbers(channels)
 
     tune_in = str(data.get("tune_in", "random")).lower()
     if tune_in not in TUNE_IN_MODES:
@@ -318,6 +339,9 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
         bridge_seconds=_clamp_float(data.get("bridge_seconds", 0.8), 0.0, 10.0, "bridge_seconds"),
         channel_bug_seconds=_clamp_float(data.get("channel_bug_seconds", 4.0), 0.0, 60.0, "channel_bug_seconds"),
         osd_duration=_clamp_float(data.get("osd_duration", 2.0), 0.0, 60.0, "osd_duration"),
+        skip_back_seconds=_clamp_float(
+            data.get("skip_back_seconds", 5.0), 0.0, 60.0, "skip_back_seconds"
+        ),
         ui=_parse_ui(data.get("ui")),
         crt=_parse_crt(data.get("crt")),
         initial_volume=initial_volume,
@@ -429,6 +453,15 @@ def _ensure_unique_numbers(channels: List[ChannelConfig]) -> None:
         seen[ch.number] = ch.name
 
 
+def _ensure_no_reserved_numbers(channels: List[ChannelConfig]) -> None:
+    for ch in channels:
+        if ch.number in RESERVED_CHANNEL_NUMBERS:
+            raise ConfigError(
+                f"channel number {ch.number} is reserved for the built-in TV "
+                f"Guide and can't be used by '{ch.name}' - pick a different number"
+            )
+
+
 def _clamp_int(value: Any, lo: int, hi: int, name: str) -> int:
     try:
         n = int(value)
@@ -456,4 +489,5 @@ __all__ = [
     "DEFAULT_VIDEO_EXTENSIONS",
     "TUNE_IN_MODES",
     "TRANSITION_EFFECTS",
+    "RESERVED_CHANNEL_NUMBERS",
 ]

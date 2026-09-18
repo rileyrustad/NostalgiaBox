@@ -28,6 +28,12 @@ class Action(Enum):
     LAST_CHANNEL = auto()   # jump back to the previously watched channel
     POWER = auto()          # toggle standby (blank screen)
     QUIT = auto()           # shut the application down entirely
+    NAV_UP = auto()         # TV Guide: move selection up
+    NAV_DOWN = auto()       # TV Guide: move selection down
+    NAV_LEFT = auto()       # normal channel: skip back / restart episode
+    NAV_RIGHT = auto()      # normal channel: skip forward to a fresh episode
+    BACK = auto()           # TV Guide: go up one folder level
+    HOME = auto()           # jump straight to the TV Guide (channel 99) from anywhere
 
 
 @dataclass(frozen=True)

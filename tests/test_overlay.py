@@ -1,5 +1,6 @@
 import re
 
+from nostalgiabox.browser import DirEntry
 from nostalgiabox.config import config_from_dict
 from nostalgiabox.overlay import OverlayManager
 from nostalgiabox.player import MockPlayer
@@ -122,3 +123,63 @@ def test_overlay_uses_configured_font_and_color(tmp_path):
     ass = player.overlays[1]
     assert "\\fnVT323" in ass          # bundled retro font
     assert "&H005AFF4D" in ass         # #4DFF5A -> ASS BBGGRR
+
+
+def test_show_guide_draws_breadcrumb_and_entries(tmp_path):
+    player = MockPlayer()
+    om = OverlayManager(player, _config(tmp_path), clock=FakeClock())
+    entries = [
+        DirEntry("Dragon", tmp_path / "dragon", True),
+        DirEntry("arthur_ep01.mp4", tmp_path / "arthur_ep01.mp4", False),
+    ]
+    om.show_guide("TV Guide", entries, 0)
+    assert 5 in player.overlays
+    ass = player.overlays[5]
+    assert "TV Guide" in ass
+    assert "Dragon" in ass
+    assert "arthur_ep01.mp4" in ass
+
+
+def test_guide_directory_entries_get_trailing_slash_files_dont(tmp_path):
+    player = MockPlayer()
+    om = OverlayManager(player, _config(tmp_path), clock=FakeClock())
+    entries = [
+        DirEntry("Dragon", tmp_path / "dragon", True),
+        DirEntry("episode.mp4", tmp_path / "episode.mp4", False),
+    ]
+    om.show_guide("TV Guide", entries, 0)
+    ass = player.overlays[5]
+    assert "Dragon/" in ass
+    assert "episode.mp4" in ass
+    assert "episode.mp4/" not in ass
+
+
+def test_guide_windowing_keeps_selection_visible(tmp_path):
+    player = MockPlayer()
+    om = OverlayManager(player, _config(tmp_path), clock=FakeClock())
+    entries = [
+        DirEntry(f"item{i:02d}", tmp_path / f"item{i:02d}", False) for i in range(30)
+    ]
+    for selected in (0, 15, 29):
+        om.show_guide("TV Guide", entries, selected)
+        ass = player.overlays[5]
+        visible_count = sum(1 for e in entries if e.name in ass)
+        assert visible_count < len(entries)  # not all 30 rows fit on screen
+        assert entries[selected].name in ass  # but the selection is never lost off-screen
+
+
+def test_clear_guide_removes_overlay(tmp_path):
+    player = MockPlayer()
+    om = OverlayManager(player, _config(tmp_path), clock=FakeClock())
+    om.show_guide("TV Guide", [DirEntry("a", tmp_path / "a", True)], 0)
+    assert 5 in player.overlays
+    om.clear_guide()
+    assert 5 not in player.overlays
+
+
+def test_clear_all_removes_guide_overlay(tmp_path):
+    player = MockPlayer()
+    om = OverlayManager(player, _config(tmp_path), clock=FakeClock())
+    om.show_guide("TV Guide", [DirEntry("a", tmp_path / "a", True)], 0)
+    om.clear_all()
+    assert 5 not in player.overlays

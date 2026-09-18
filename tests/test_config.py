@@ -91,6 +91,26 @@ def test_volume_and_durations_clamped(tmp_path):
     assert cfg.transition_duration == 0.0
 
 
+def test_skip_back_seconds_default_and_clamped(tmp_path):
+    make_show(tmp_path, "a", 1)
+    cfg = config_from_dict({"channels": [{"path": str(tmp_path / "a")}]})
+    assert cfg.skip_back_seconds == 5.0
+
+    data = {
+        "skip_back_seconds": -10,
+        "channels": [{"path": str(tmp_path / "a")}],
+    }
+    cfg = config_from_dict(data)
+    assert cfg.skip_back_seconds == 0.0
+
+    data = {
+        "skip_back_seconds": 999,
+        "channels": [{"path": str(tmp_path / "a")}],
+    }
+    cfg = config_from_dict(data)
+    assert cfg.skip_back_seconds == 60.0
+
+
 def test_video_extensions_normalised(tmp_path):
     make_show(tmp_path, "a", 1)
     data = {
@@ -200,3 +220,23 @@ def test_relative_paths_resolved_against_config_dir(tmp_path):
     cfg_file.write_text("channels:\n  - path: arthur\n    name: Arthur\n")
     cfg = load_config(cfg_file)
     assert cfg.channels[0].path == tmp_path / "arthur"
+
+
+def test_channel_number_99_is_reserved(tmp_path):
+    make_show(tmp_path, "a", 1)
+    data = {
+        "channels": [
+            {"number": 99, "name": "Sneaky", "path": str(tmp_path / "a")},
+        ]
+    }
+    with pytest.raises(ConfigError, match="reserved"):
+        config_from_dict(data)
+
+
+def test_autodiscovery_colliding_with_reserved_channel_rejected(tmp_path):
+    for n in ("a", "b", "c", "d", "e"):
+        make_show(tmp_path, n, 1)
+    # 5 folders starting at 95 -> 95, 96, 97, 98, 99: collides with the
+    # reserved TV Guide channel.
+    with pytest.raises(ConfigError, match="reserved"):
+        config_from_dict({"media_root": str(tmp_path), "first_channel_number": 95})

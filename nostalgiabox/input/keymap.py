@@ -61,6 +61,19 @@ _EVDEV_ACTIONS: Dict[str, InputEvent] = {
     # Quit the application (mostly for keyboards during setup).
     "KEY_ESC": InputEvent(Action.QUIT),
     "KEY_Q": InputEvent(Action.QUIT),
+    # A second D-pad, distinct from the channel/volume one above - e.g. a
+    # remote's extra nav buttons programmed via Flirc to send these literal
+    # keys. W/S/B/H (up/down/back/home) are only meaningful while channel 99
+    # (the Guide) is tuned in; harmless no-ops otherwise. A/D (left/right) are
+    # meaningful on normal channels too: skip back/restart and skip forward to
+    # a fresh episode (see TVApp._skip_back / _skip_forward); they remain
+    # no-ops while the Guide is tuned in.
+    "KEY_W": InputEvent(Action.NAV_UP),
+    "KEY_A": InputEvent(Action.NAV_LEFT),
+    "KEY_S": InputEvent(Action.NAV_DOWN),
+    "KEY_D": InputEvent(Action.NAV_RIGHT),
+    "KEY_B": InputEvent(Action.BACK),
+    "KEY_H": InputEvent(Action.HOME),
 }
 
 # Digit keys (top row and numeric keypad) -> DIGIT events.
@@ -89,6 +102,12 @@ _ACTION_BY_NAME: Dict[str, InputEvent] = {
     "last": InputEvent(Action.LAST_CHANNEL),
     "power": InputEvent(Action.POWER),
     "quit": InputEvent(Action.QUIT),
+    "nav_up": InputEvent(Action.NAV_UP),
+    "nav_down": InputEvent(Action.NAV_DOWN),
+    "nav_left": InputEvent(Action.NAV_LEFT),
+    "nav_right": InputEvent(Action.NAV_RIGHT),
+    "back": InputEvent(Action.BACK),
+    "home": InputEvent(Action.HOME),
     "none": None,  # explicitly unbind a key
 }
 
@@ -145,6 +164,18 @@ _CHAR_TO_KEY: Dict[str, str] = {
     "P": "KEY_POWER",
     "q": "KEY_Q",
     "Q": "KEY_Q",
+    "w": "KEY_W",
+    "W": "KEY_W",
+    "a": "KEY_A",
+    "A": "KEY_A",
+    "s": "KEY_S",
+    "S": "KEY_S",
+    "d": "KEY_D",
+    "D": "KEY_D",
+    "b": "KEY_B",
+    "B": "KEY_B",
+    "h": "KEY_H",
+    "H": "KEY_H",
     "\r": "KEY_ENTER",
     "\n": "KEY_ENTER",
     " ": "KEY_ENTER",

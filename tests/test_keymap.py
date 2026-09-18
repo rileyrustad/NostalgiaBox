@@ -92,6 +92,29 @@ def test_keyboard_backend_override_precedence():
     assert kb._lookup("KEY_PAGEUP").action == Action.CHANNEL_UP
 
 
+def test_evdev_guide_nav_keys():
+    assert evdev_key_to_event("KEY_W").action == Action.NAV_UP
+    assert evdev_key_to_event("KEY_A").action == Action.NAV_LEFT
+    assert evdev_key_to_event("KEY_S").action == Action.NAV_DOWN
+    assert evdev_key_to_event("KEY_D").action == Action.NAV_RIGHT
+    assert evdev_key_to_event("KEY_B").action == Action.BACK
+    assert evdev_key_to_event("KEY_H").action == Action.HOME
+
+
+def test_stdin_guide_nav_chars():
+    assert stdin_char_to_event("w").action == Action.NAV_UP
+    assert stdin_char_to_event("a").action == Action.NAV_LEFT
+    assert stdin_char_to_event("s").action == Action.NAV_DOWN
+    assert stdin_char_to_event("d").action == Action.NAV_RIGHT
+    assert stdin_char_to_event("b").action == Action.BACK
+    assert stdin_char_to_event("h").action == Action.HOME
+
+
+def test_parse_key_overrides_guide_nav_action():
+    ov = parse_key_overrides({"KEY_F5": "nav_up"})
+    assert ov["KEY_F5"].action == Action.NAV_UP
+
+
 def test_cec_keys():
     assert cec_key_to_event("channel up").action == Action.CHANNEL_UP
     assert cec_key_to_event("Volume Down").action == Action.VOLUME_DOWN
