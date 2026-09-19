@@ -442,27 +442,37 @@ def test_naturally_ended_episode_reachable_via_nav_left(tmp_path):
 
 
 def test_channel_up_held_only_changes_channel_once(tmp_path):
-    # Simulates a held button: several CHANNEL_UP events arrive with no time
-    # passing between them (evdev autorepeat). Only the first should count;
-    # the rest are swallowed until the cooldown elapses.
+    # Simulates a genuinely long held button: many CHANNEL_UP auto-repeat
+    # events arrive, spaced closer together than the release gap, for far
+    # longer than the release gap itself. Only the very first should count -
+    # a fixed cooldown-since-last-change would still let this cascade through
+    # several channels, but the release-gap gate must not, no matter how long
+    # the hold lasts.
     app, player, clock = build_app(tmp_path)
     app.start()
     send(app, Action.CHANNEL_UP)
+    assert app.lineup.current.number == 3  # first press: immediate
+    for _ in range(20):
+        clock.advance(0.1)  # repeats faster than the release gap
+        send(app, Action.CHANNEL_UP)
+    assert app.lineup.current.number == 3  # still just one channel moved
+
+    clock.advance(app.config.channel_change_release_gap + 0.01)  # button released
     send(app, Action.CHANNEL_UP)
-    send(app, Action.CHANNEL_UP)
-    assert app.lineup.current.number == 3  # moved exactly one channel
-    clock.advance(app.config.channel_change_cooldown + 0.01)
-    send(app, Action.CHANNEL_UP)
-    assert app.lineup.current.number == 4  # cooldown elapsed: next change allowed
+    assert app.lineup.current.number == 4  # a genuinely new press is accepted
 
 
 def test_channel_down_held_only_changes_channel_once(tmp_path):
     app, player, clock = build_app(tmp_path)
     app.start()
     send(app, Action.CHANNEL_DOWN)
-    send(app, Action.CHANNEL_DOWN)
     assert app.lineup.current.number == 99  # wrapped exactly once
-    clock.advance(app.config.channel_change_cooldown + 0.01)
+    for _ in range(20):
+        clock.advance(0.1)
+        send(app, Action.CHANNEL_DOWN)
+    assert app.lineup.current.number == 99  # still only the one wrap
+
+    clock.advance(app.config.channel_change_release_gap + 0.01)
     send(app, Action.CHANNEL_DOWN)
     assert app.lineup.current.number == 4
 

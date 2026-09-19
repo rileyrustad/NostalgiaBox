@@ -88,9 +88,10 @@ bridge_seconds: 0.8
 channel_bug_seconds: 4    # how long the channel banner lingers
 osd_duration: 2           # how long the volume bar / messages linger
 
-# Minimum time between accepted channel changes. Raise this if a held
-# channel up/down button still skips more channels than intended.
-channel_change_cooldown: 0.35
+# A held channel up/down button only ever moves one channel - the next press
+# only counts once the button has been let go for at least this long. Raise
+# this if a held button still skips more than one channel.
+channel_change_release_gap: 0.5
 
 # Second D-pad's Left (skip back): restart the current episode if it's been
 # playing longer than this many seconds; otherwise jump to the previous

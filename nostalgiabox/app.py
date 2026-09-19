@@ -68,7 +68,9 @@ class TVApp:
         self._playing_path: Optional[Path] = None
         self._playing_from_guide = False
         self._last_channel_number: Optional[int] = None
-        self._last_channel_change: float = 0.0
+        # Channel-change "one per physical press" gate - see _channel_change_allowed.
+        self._channel_gate_open = True
+        self._last_channel_signal: float = 0.0
         self._running = False
 
         # Direct channel entry ("type 1 then 2 -> channel 12").
@@ -247,16 +249,23 @@ class TVApp:
 
     # -- channel changing ---------------------------------------------------
     def _channel_change_allowed(self) -> bool:
-        """Rate-limit CHANNEL_UP/DOWN so a held button doesn't skip channels.
+        """Exactly one channel change per physical press, however long it's held.
 
-        The keyboard backend lets these two actions auto-repeat while held
-        (see input/keyboard.py), which otherwise fires far more channel
-        changes than intended from one long press.
+        The keyboard backend lets CHANNEL_UP/DOWN auto-repeat while held (see
+        input/keyboard.py), so a single long press arrives here as a burst of
+        signals. A signal is only accepted as a *new* press if the stream has
+        gone quiet for ``channel_change_release_gap`` seconds since the last
+        one seen - i.e. the button was actually released - otherwise it's a
+        continuation of the same held press and is ignored, no matter how
+        long the hold lasts.
         """
         now = self._clock()
-        if now - self._last_channel_change < self.config.channel_change_cooldown:
+        if now - self._last_channel_signal >= self.config.channel_change_release_gap:
+            self._channel_gate_open = True
+        self._last_channel_signal = now
+        if not self._channel_gate_open:
             return False
-        self._last_channel_change = now
+        self._channel_gate_open = False
         return True
 
     def _channel_up(self) -> None:
